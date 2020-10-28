@@ -1,0 +1,772 @@
+ASTC codec version 1.7
+Copyright (C) 2011-2019 Arm Limited
+All rights reserved. Use of this software is subject to terms of its license.
+
+Usage:
+Compress to texture file:
+   astcenc.exe -c <inputfile> <outputfile> <rate> [options]
+Decompress from texture file:
+   astcenc.exe -d <inputfile> <outputfile> [options]
+Compress, then immediately decompress to image:
+   astcenc.exe -t <inputfile> <outputfile> <rate> [options]
+Compare two files (no compression or decompression):
+   astcenc.exe -compare <file1> <file2> [options]
+
+When encoding/decoding a texture for use with the LDR-SRGB submode,
+use -cs, -ds, -ts instead of -c, -d, -t.
+When encoding/decoding a texture for use with the LDR-linear submode,
+use -cl, -dl, -tl instead of -c, -d, -t.
+
+For compression, the input file formats supported are
+ * PNG (*.png)
+ * Targa (*.tga)
+ * JPEG (*.jpg)
+ * GIF (*.gif) (non-animated only)
+ * BMP (*.bmp)
+ * Radiance HDR (*.hdr)
+ * Khronos Texture KTX (*.ktx)
+ * DirectDraw Surface DDS (*.dds)
+ * Half-Float-TGA (*.htga)
+ * OpenEXR (*.exr; only if 'exr_to_htga' is present in the path)
+
+For the KTX and DDS formats, the following subset of the format
+features are supported; the subset is:
+ * 2D and 3D textures supported
+ * Uncompressed only, with unorm8, unorm16, float16 or float32 components
+ * R, RG, RGB, BGR, RGBA, BGRA, Luminance and Luminance-Alpha texel formats
+ * In case of multiple image in one file (mipmap, cube-faces, texture-arrays)
+   the codec will read the first one and ignore the other ones.
+
+When using HDR or 3D textures, it is recommended to use the KTX or DDS formats.
+Separate 2D image slices can be assembled into a 3D image using the -array option.
+
+The output file will be an ASTC compressed texture file (recommended filename
+ending .astc)
+
+For decompression, the input file must be an ASTC compressed texture file;
+the following formats are supported for output:
+ * Targa (*.tga)
+ * KTX (*.ktx)
+ * DDS (*.dds)
+ * Half-Float-TGA (*.htga)
+ * OpenEXR (*.exr; only if 'exr_to_htga' is present in the path)
+
+Targa is suitable only for 2D LDR images; for HDR and/or 3D images,
+please use KTX or DDS.
+
+For compression, the <rate> argument specifies the bitrate or block
+dimension to use. This argument can be specified in one of two ways:
+ * A decimal number (at least one actual decimal needed). This will cause 
+   the codec to interpret the number as a desired bitrate, and pick a block
+   size to match that bitrate as closely as possible. For example, if you want a
+   bitrate of 2.0 bits per texel, then specify the <rate> argument as 2.0
+ * A block size. This specifies the block dimensions to use along the
+   X, Y (and for 3D textures) Z axes. The dimensions are separated with
+   the character x, with no spaces. For 2D textures, the supported
+   dimensions along each axis are picked from the set {4,5,6,8,10,12};
+   for 3D textures, the supported dimensions are picked from the
+   set {3,4,5,6}. For example, if you wish to encode a 2D texture using the
+   10x6 block size (10 texels per block along the X axis, 6 texels per block
+   along the Y axis, then specify the <rate> argument as 10x6 .
+Some examples of supported 2D block sizes are:
+  4x4 -> 8.0 bpp
+  5x5 -> 5.12 bpp
+  6x6 -> 3.56 bpp
+  8x6 -> 2.67 bpp
+  8x8 -> 2.0 bpp
+ 10x8 -> 1.6 bpp
+ 10x10 -> 1.28 bpp
+ 10x12 -> 1.07 bpp
+ 12x12 -> 0.89 bpp
+If you try to specify a bitrate that can potentially map to multiple different
+block sizes, the codec will choose the block size with the least lopsided
+aspect ratio (e.g. if you specify 2.67, then the codec will choose the
+8x6 block size, not 12x4)
+
+Below is a description of all the available options. Most of them make sense
+for encoding only, however there are some that affect decoding as well
+(such as -dsw and the normal-presets)
+
+
+Built-in error-weighting Presets:
+---------------------------------
+The presets provide easy-to-use combinations of encoding options that
+are designed for use with certain commonly-occurring kinds of
+textures.
+
+ -normal_psnr
+      For encoding, assume that the input texture is a normal map with the
+      X and Y components of the actual normals in the Red and Green
+      color channels. The codec will then move the 2nd component to Alpha,
+      and apply an error-weighting function based on angular error.
+
+      It is possible to use this preset with texture decoding as well,
+      in which case it will expand the normal map from 2 to 3 components
+      after the actual decoding.
+
+      The -normal_psnr preset as a whole is equivalent to the options
+      "-rn -esw rrrg -dsw raz1 -ch 1 0 0 1 -oplimit 1000 -mincorrel 0.99" .
+
+ -normal_percep
+      Similar to -normal_psnr, except that it tries to optimize the normal
+      map for best possible perceptual results instead of just maximizing
+      angular PSNR.
+      The -normal_percep preset as a whole is equivalent to the options
+      "-normal_psnr -b 2.5 -v 3 1 1 0 50 0 -va 1 1 0 50 -dblimit 60" .
+
+ -mask
+      Assume that the input texture is a texture that contains
+      unrelated content in its various color channels, and where
+      it is undesirable for errors in one channel to affect
+      the other channels.
+      Equivalent to "-v 3 1 1 0 25 0.03 -va 0 25" .
+
+ -alphablend
+      Assume that the input texture is an RGB-alpha texture where
+      the alpha component is used to represent opacity.
+      (0=fully transparent, 1=fully opaque)
+      Equivalent to "-a 1" .
+
+ -hdr
+      Assume that the input texture is an HDR texture. If an alpha channel is
+      present, it is treated as an LDR channel (e.g. opacity)
+      Optimize for 4th-root error for the color and linear error for the alpha.
+      Equivalent to
+          "-forcehdr_rgb -v 0 0.75 0 1 0 0 -va 0.02 1 0 0 -dblimit 999"
+
+ -hdra
+      Assume that the input texture is an HDR texture, and optimize
+      for 4th-root error. If an alpha channel is present, it is
+      assumed to be HDR and optimized for 4th-root error as well.
+      Equivalent to
+          "-forcehdr_rgba -v 0 0.75 0 1 0 0 -va 0.75 0 1 0 -dblimit 999"
+
+ -hdr_log
+ -hdra_log
+      Assume that the input texture is an HDR texture, and optimize
+      for logarithmic error. This should give better results than -hdr
+      on metrics like "logRMSE" and "mPSNR", but the subjective
+      quality (in particular block artifacts) is generally significantly worse
+      than -hdr.
+      "-hdr_log" is equivalent to
+          "-forcehdr_rgb -v 0 1 0 1 0 0 -va 0.02 1 0 0 -dblimit 999"
+      "-hdra_log" is equivalent to
+          "-forcehdr_rgba -v 0 1 0 1 0 0 -va 1 0 1 0 -dblimit 999"
+
+
+
+Performance-quality tradeoff presets:
+-------------------------------------
+These are presets that provide different tradeoffs between encoding
+performance and quality. Exactly one of these presets has to be specified
+for encoding; if this is not done, the codec reports an error message.
+
+ -veryfast
+      Run codec in very-fast-mode; this generally results in substantial
+      quality loss.
+
+ -fast
+      Run codec in fast-mode. This generally results in mild quality loss.
+
+ -medium
+      Run codec in medium-speed-mode.
+
+ -thorough
+     Run codec in thorough-mode. This should be sufficient to fix most
+     cases where "-medium" provides inadequate quality.
+
+ -exhaustive
+      Run codec in exhaustive-mode. This usually produces only
+      marginally better quality than "-thorough" while considerably
+      increasing encode time.
+
+
+Low-level error weighting options:
+----------------------------------
+These options provide low-level control of the error-weighting options
+that the codec provides.
+
+ -v <radius> <power> <baseweight> <avgscale> <stdevscale> <mixing-factor>
+      Compute the per-texel relative error weighting for the RGB color
+      channels as follows:
+
+       weight = 1 / (<baseweight> + <avgscale>
+            * average^2 + <stdevscale> * stdev^2)
+
+      The average and stdev are computed as the average-value and the
+      standard deviation across a neighborhood of each texel; the <radius>
+      argument specifies how wide this neighborhood should be.
+      If this option is given without -va, it affects the weighting of RGB
+      color components only, while alpha is assigned the weight 1.0 .
+
+      The <mixing-factor> parameter is used to control the degree of mixing
+      between color channels. Setting this parameter to 0 causes the average
+      and stdev computation to be done completely separately for each color
+      channel; setting it to 1 causes the results from the red, green and
+      blue color channel to be combined into a single result that is applied
+      to all three channels. It is possible to set the mixing factor
+      to a value between 0 and 1 in order to obtain a result in-between.
+
+      The <power> argument is a power used to raise the values of the input
+      pixels before computing average and stdev; e.g. a power of 0.5 causes
+      the codec to take the square root of every input pixel value before
+      computing the averages and standard deviations.
+
+ -va <baseweight> <power> <avgscale> <stdevscale>
+      Used together with -v; it computes a relative per-texel
+      weighting for the alpha component based on average and standard
+      deviation in the same manner as described for -v, but with its own
+      <baseweight>, <power>, <avgscale> and <stdevscale> parameters.
+
+ -a <radius>
+      For textures with alpha channel, scale per-texel weights by
+      alpha. The alpha value chosen for scaling of any particular texel
+      is taken as an average across a neighborhood of the texel.
+      The <radius> argument gives the radius of this neighborhood;
+      a radius of 0 causes the texel's own alpha value to be used with
+      no contribution from neighboring texels.
+
+ -ch <red_weight> <green_weight> <blue_weight> <alpha_weight>
+      Assign relative weight to each color channel.
+      If this option is combined with any of the other options above,
+      the other options are used to compute a weighting, then the 
+      weighting is multiplied by the weighting provided by this argument.
+
+ -rn
+      Assume that the red and alpha color channels (after swizzle)
+      represent the X and Y components for a normal map,
+      and scale the error weighting so as to match angular error as closely
+      as possible. The reconstruction function for the Z component
+      is assumed to be Z=sqrt(1 - X^2 - X^2).
+
+ -b <weighting>
+      Increase error weight for texels at compression-block edges
+      and corners; the parameter specifies how much the weights are to be
+      modified, with 0 giving no modification. Higher values should reduce
+      block-artifacts, at the cost of worsening other artifacts.
+
+
+Low-level performance-quality tradeoff options:
+-----------------------------------------------
+These options provide low-level control of the performance-quality tradeoffs
+that the codec provides.
+
+ -plimit <number>
+      Test only <number> different partitions. Higher numbers give better
+      quality at the expense of longer encode time; however large values tend
+      to give diminishing returns. This parameter can be set to a
+      number from 1 to 1024. By default, this limit is set based on the active
+      preset, as follows:
+        -veryfast :  2
+        -fast     :  4
+        -medium   :  25
+        -thorough :  100
+        -exhaustive  : 1024
+
+ -dblimit <number>
+      Stop compression work on a block as soon as the PSNR of the block,
+      as measured in dB, exceeds this limit. Higher numbers give better
+      quality at the expense of longer encode times. If not set explicitly,
+      it is set based on the currently-active block size and preset, as listed
+      below (where N is the number of texels per block):
+
+        -veryfast : dblimit = MAX( 53-19*log10(N), 70-35*log10(N) )
+        -fast     : dblimit = MAX( 63-19*log10(N), 85-35*log10(N) )
+        -medium   : dblimit = MAX( 70-19*log10(N), 95-35*log10(N) )
+        -thorough   : dblimit = MAX( 77-19*log10(N), 105-35*log10(N) )
+        -exhaustive : dblimit = 999
+
+      Note that the compressor is not actually guaranteed to reach these PSNR
+      numbers for any given block; also, at the point where the compressor
+      discovers that it has exceeded the dblimit, it may have exceeded it by
+      a large amount, so it is still possible to get a PSNR value that is
+      substantially higher than the dblimit would suggest.
+
+      This option is ineffective for HDR textures.
+
+ -oplimit <factor>
+      If the error term from encoding with 2 partitions is greater than the
+      error term from encoding with 1 partition by more than the specified
+      factor, then cut compression work short.
+      By default, this factor is set based on the active preset, as follows:
+        -veryfast : 1.0
+        -fast     : 1.0
+        -medium   : 1.2
+        -thorough : 2.5
+        -exhaustive  : 1000
+      The codec will not apply this factor if the input texture is a normal
+      map (content resembles a normal-map, or one of the -normal_* presets
+      is used).
+
+ -mincorrel <value>
+      For each block, the codec will compute the correlation coefficients
+      between any two color components; if no pair of colors have a
+      correlation coefficient below the cutoff specified by this switch,
+      the codec will abstain from trying the dual-weight-planes.
+      By default, this factor is set based on the active preset, as follows:
+        -veryfast : 0.5
+        -fast     : 0.5
+        -medium   : 0.75
+        -thorough : 0.95
+        -exhaustive  : 0.99
+      If the input texture is a normal-map (content resembles a normal-map
+      or one of the -normal_* presets are used) the codec will use a value
+      of 0.99.
+
+ -bmc <value>
+      Cutoff on the set of block modes to use; the cutoff is a percentile
+      of the block modes that are most commonly used. The value takes a value
+      from 0 to 100, where 0 offers the highest speed and lowest quality,
+      and 100 offers the highest quality and lowest speed.
+      By default, this factor is set based on the active preset, as follows:
+       -veryfast  : 25
+       -fast      : 50
+       -medium    : 75
+       -thorough  : 95
+       -exhaustive : 100
+      This option is ineffective for 3D textures.
+
+ -maxiters <value>
+      Maximum number of refinement iterations to apply to colors and weights.
+      Minimum value is 1; larger values give slight quality increase
+      at expense of mild performance loss. By default, the iteration count is
+      picked based on the active preset, as follows:
+       -veryfast  : 1
+       -fast      : 1
+       -medium    : 2
+       -thorough  : 4
+       -exhaustive : 4
+
+
+
+Other options:
+--------------
+
+ -array <size>
+      Loads a an array of 2D image slices as a 3D image. The filename given
+      is used as a base, and decorated with _0, _1, up to _<size-1> prior
+      to loading each slice. So -array 3 input.png would load input_0.png,
+      input_1.png and input_2.png as slices at z=0,1,2 respectively.
+
+ -forcehdr_rgb
+      Force the use of HDR endpoint modes. By default, only LDR endpoint
+      modes are used. If alpha is present, alpha is kept as LDR.
+ -forcehdr_rgba
+      Force the use of HDR endpoint modes. By default, only LDR endpoint
+      modes are used. If alpha is present, alpha is forced into HDR as well.
+
+ -esw <swizzlepattern>
+      Swizzle the color components before encoding. The swizzle pattern
+      is specified as a 4-character string, where the characters specify
+      which color component will end up in the Red, Green, Blue and Alpha
+      channels before encoding takes place. The characters may be taken
+      from the set (r,g,b,a,0,1), where r,g,b,a use color components from
+      the input texture and 0,1 use the constant values 0 and 1.
+
+      As an example, if you have an input RGBA texture where you wish to
+      switch around the R and G channels, as well as replacing the
+      alpha channel with the constant value 1, a suitable swizzle
+      option would be:
+        -esw grb1
+      Note that if -esw is used together with any of the
+      error weighting functions, the swizzle is considered to be
+      applied before the error weighting function.
+
+ -dsw <swizzlepattern>
+      Swizzle pattern to apply after decoding a texture. This pattern is
+      specified in the same way as the pre-encoding swizzle pattern
+      for the -sw switch. However, one additional character is supported,
+      namely 'z' for constructing the third component of a normal map.
+
+ -srgb
+      Convert input image from sRGB to linear-RGB before encode; convert
+      output image from linear-RGB to sRGB after decode. For encode, the
+      transform is applied after swizzle; for decode, the transform
+      is applied before swizzle.
+
+ -j <numthreads>
+      Run encoding with multithreading, using the specified number
+      of threads. If not specified, the codec will autodetect the
+      number of available logical CPUs and spawn one thread for each.
+      Use "-j 1" if you wish to run the codec in single-thread mode.
+
+ -silentmode
+      Suppresses all output from the codec, except in case of errors.
+      If this switch is not provided, the codec will display the encoding
+      settings it uses and show a progress counter during encode.
+
+ -time
+      Displays time taken for entire run, together with time taken for
+      coding step only. If requested, this is output even in -silentmode.
+
+ -showpsnr
+      In test mode (-t), displays PSNR difference between input and output
+      images, in dB, even if -silentmode is specified. Works for LDR images
+      only.
+
+ -mpsnr <low> <high>
+     Set the low and high f-stop values to use for the mPSNR error metric.
+     Default is low=-10, high=10.
+     The mPSNR error metric only applies to HDR textures.
+     This option can be used together with -compare .
+
+
+
+Tips & tricks:
+--------------
+ASTC, being a block-based format, is moderately prone to block artifacts.
+If block artifacts are a problem when compressing a given texture,
+adding some or all of following command-line options may help:
+ -b 1.8
+ -v 2 1 1 0 25 0.1
+ -va 1 1 0 25
+ -dblimit 60
+The -b option is a general-purpose block-artifact reduction option. The
+-v and -va options concentrate effort where smooth regions lie next to regions
+with high detail (such regions are particularly prone to block artifacts
+otherwise). The -dblimit option is sometimes also needed to reduce
+block artifacts in regions with very smooth gradients.
+
+If a texture exhibits severe block artifacts in only some, but not all, of
+the color channels (common problem with mask textures), then it may help
+to use the -ch option to raise the weighting of the affected color channel(s).
+For example, if the green color channel in particular suffers from block
+artifacts, then using the commandline option
+ -ch 1 6 1 1
+should improve the result significantly.
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 2048 x 2048 x 1, 4 components
+
+65536 blocks to process ..
+52090113972027274835354302507258656644741981958969978210577113631215712945137351452615333161341692817734185291932420119209002171122524233312412324907257092651927337281512895729775305713135532151329633377034570353723628737159379503874039637404554125942056428594366544468452714606946859476494885349667504805128352085528875370554511553185612756926577475857059379601956099061791625946338864184647786501665193653636547365529Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 1024 x 1024 x 1, 4 components
+
+16384 blocks to process ..
+100357705110516474932580366277428823190359852106691147512276130641386714518151601589416325Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 512 x 512 x 1, 4 components
+
+4096 blocks to process ..
+713837241088160036794060Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 256 x 256 x 1, 4 components
+
+1024 blocks to process ..
+128396818Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 128 x 128 x 1, 4 components
+
+256 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 64 x 64 x 1, 4 components
+
+64 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 32 x 32 x 1, 4 components
+
+16 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 16 x 16 x 1, 4 components
+
+4 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 8 x 8 x 1, 4 components
+
+1 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 8 x 8 x 1, 4 components
+
+1 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 8 x 8 x 1, 4 components
+
+1 blocks to process ..
+Encoding settings:
+
+2D Block size: 8x8 (2.00 bpp)
+3D Block size: 8x8x1 (2.00 bpp)
+Radius for mean-and-stdev calculations: 0 texels
+RGB power: 1
+RGB base-weight: 1
+RGB local-mean weight: 0
+RGB local-stdev weight: 0
+RGB mean-and-stdev mixing across color channels: 0
+Alpha power: 1
+Alpha base-weight: 1
+Alpha local-mean weight: 0
+Alpha local-stdev weight: 0
+RGB weights scale with alpha: disabled
+Color channel relative weighting: R=1 G=1 B=1 A=1
+Block-artifact suppression parameter : 0
+Number of distinct partitionings to test: 2 (preset)
+PSNR decibel limit: 2D: 18.682579 3D: 18.682579 (preset)
+1->2 partition limit: 1.000000
+Dual-plane color-correlation cutoff: 0.500000 (preset)
+Block Mode Percentile Cutoff: 25.000000 (preset)
+Max refinement iterations: 1 (preset)
+Thread count : 16 (autodetected)
+
+C:\Users\papatel\AppData\Local\Temp\PVRTexLib_22616.ktx: 2D LDR image, 8 x 8 x 1, 4 components
+
+1 blocks to process ..
